@@ -1,8 +1,65 @@
+import asyncio
 import atexit
+import concurrent.futures
 import json
+import os
+from pathlib import Path
+
 from claude_code_orchestrate.mcp_transport import MCPTransport
+from claude_agent_sdk import query, ClaudeAgentOptions, ResultMessage, AgentDefinition
 
 _transport: MCPTransport | None = None
+_agent_defs: dict[str, AgentDefinition] | None = None
+
+
+def _load_agent_definitions() -> dict[str, AgentDefinition]:
+    """Load agent definitions from ~/.claude/agents/*.md files."""
+    agents_dir = Path.home() / ".claude" / "agents"
+    defs = {}
+    if not agents_dir.is_dir():
+        return defs
+    for md_file in agents_dir.glob("*.md"):
+        try:
+            text = md_file.read_text()
+        except (UnicodeDecodeError, OSError):
+            continue
+        # Parse YAML frontmatter
+        if not text.startswith("---"):
+            continue
+        parts = text.split("---", 2)
+        if len(parts) < 3:
+            continue
+        frontmatter = parts[1].strip()
+        body = parts[2].strip()
+
+        # Parse frontmatter fields
+        meta = {}
+        for line in frontmatter.split("\n"):
+            if ":" in line:
+                key, _, val = line.partition(":")
+                meta[key.strip()] = val.strip().strip('"').strip("'")
+
+        name = meta.get("name", md_file.stem)
+        tools_str = meta.get("tools", "")
+        tools = [t.strip() for t in tools_str.split(",") if t.strip()] if tools_str else None
+        model_val = meta.get("model", "inherit")
+        if model_val not in ("sonnet", "opus", "haiku", "inherit"):
+            model_val = "inherit"
+
+        defs[name] = AgentDefinition(
+            description=meta.get("description", ""),
+            prompt=body,
+            tools=tools,
+            model=model_val,
+        )
+    return defs
+
+
+def _get_agent_definitions() -> dict[str, AgentDefinition]:
+    global _agent_defs
+    if _agent_defs is None:
+        _agent_defs = _load_agent_definitions()
+    return _agent_defs
 
 
 def _get_transport() -> MCPTransport:
@@ -99,9 +156,32 @@ def Bash(command: str, timeout: int = None, description: str = None) -> str:
 def Agent(description: str, prompt: str, subagent_type: str = None, model: str = None,
           run_in_background: bool = None, name: str = None, team_name: str = None,
           mode: str = None, isolation: str = None) -> str:
-    return _call("Agent", description=description, prompt=prompt, subagent_type=subagent_type,
-                 model=model, run_in_background=run_in_background, name=name,
-                 team_name=team_name, mode=mode, isolation=isolation)
+    """Spawn a sub-agent using claude-agent-sdk."""
+    agents = _get_agent_definitions()
+
+    async def _run():
+        result_text = ""
+        async for msg in query(
+            prompt=prompt,
+            options=ClaudeAgentOptions(
+                permission_mode="bypassPermissions",
+                model=model,
+                agents=agents or None,
+                cwd=os.getcwd(),
+            ),
+        ):
+            if isinstance(msg, ResultMessage):
+                result_text = msg.result
+        return result_text
+
+    try:
+        asyncio.get_running_loop()
+        # Already inside a running event loop — spin up a thread with its own loop
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            future = pool.submit(asyncio.run, _run())
+            return future.result()
+    except RuntimeError:
+        return asyncio.run(_run())
 
 
 def SendMessage(to: str, message: str, summary: str = None) -> str:

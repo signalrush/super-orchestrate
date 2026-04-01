@@ -30,17 +30,25 @@ def test_read_strips_none_optional_args():
         transport.call_tool.assert_called_once_with("Read", {"file_path": "/tmp/test.py", "limit": 10})
 
 
-def test_agent_passes_all_params():
+def test_agent_passes_prompt_to_sdk():
+    """Agent uses claude-agent-sdk directly, not MCP transport."""
+    mock_result = MagicMock()
+    mock_result.result = "agent done"
+
+    async def mock_query(*args, **kwargs):
+        yield mock_result
+
     transport = _mock_transport()
     with patch.object(client_mod, "_transport", transport):
-        from claude_code_orchestrate.client import Agent
-        Agent(description="fix bugs", prompt="fix all bugs", model="sonnet", run_in_background=True)
-        transport.call_tool.assert_called_once_with("Agent", {
-            "description": "fix bugs",
-            "prompt": "fix all bugs",
-            "model": "sonnet",
-            "run_in_background": True,
-        })
+        with patch("claude_code_orchestrate.client.query", side_effect=mock_query):
+            with patch("claude_code_orchestrate.client.ResultMessage", type(mock_result)):
+                client_mod._agent_defs = {}
+                result = client_mod.Agent(
+                    description="fix bugs", prompt="fix all bugs", model="sonnet"
+                )
+                # Agent bypasses MCP transport entirely
+                transport.call_tool.assert_not_called()
+                assert result == "agent done"
 
 
 def test_bash_with_timeout():
@@ -101,3 +109,19 @@ def test_edit_returns_diff():
         result = client_mod.Edit(file_path="/tmp/f.txt", old_string="old", new_string="new")
         assert "-old" in result
         assert "+new" in result
+
+
+def test_agent_uses_sdk_not_mcp():
+    """Agent function should not go through MCP transport."""
+    mock_result = MagicMock()
+    mock_result.result = "agent response"
+
+    async def mock_query(*args, **kwargs):
+        yield mock_result
+
+    with patch("claude_code_orchestrate.client.query", side_effect=mock_query):
+        with patch("claude_code_orchestrate.client.ResultMessage", type(mock_result)):
+            # Reset cached agent defs so _get_agent_definitions() runs fresh
+            client_mod._agent_defs = {}
+            result = client_mod.Agent(description="test", prompt="say hello")
+            assert result == "agent response"

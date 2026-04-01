@@ -48,8 +48,14 @@ class MCPTransport:
 
     def stop(self) -> None:
         if self._proc:
-            self._proc.stdin.close()
-            self._proc.stdout.close()
+            try:
+                self._proc.stdin.close()
+            except Exception:
+                pass
+            try:
+                self._proc.stdout.close()
+            except Exception:
+                pass
             try:
                 self._proc.terminate()
                 self._proc.wait(timeout=5)
@@ -85,7 +91,10 @@ class MCPTransport:
             line = self._proc.stdout.readline()
             if not line:
                 raise ClaudeCodeError("transport", "MCP server closed unexpectedly")
-            data = json.loads(line)
+            try:
+                data = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ClaudeCodeError("transport", f"Invalid JSON from MCP server: {exc}") from exc
             # Skip notifications (no id field)
             if "id" not in data:
                 continue
