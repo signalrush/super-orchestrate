@@ -1,0 +1,7 @@
+Metadata-Version: 2.4
+Name: claude-code-orchestrate
+Version: 0.1.0
+Summary: Python SDK for Claude Code CLI tools via MCP
+License-Expression: MIT
+Project-URL: Repository, https://github.com/tianhaowu/claude-code-orchestrate
+Requires-Python: >=3.10

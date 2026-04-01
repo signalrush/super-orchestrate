@@ -159,24 +159,47 @@ def Agent(description: str, prompt: str, subagent_type: str = None, model: str =
     """Spawn a sub-agent using claude-agent-sdk."""
     agents = _get_agent_definitions()
 
+    # Resolve agent definition by subagent_type or name
+    agent_def = None
+    if subagent_type and subagent_type in agents:
+        agent_def = agents[subagent_type]
+    elif name and name in agents:
+        agent_def = agents[name]
+
+    # System prompt: agent definition prompt appended to Claude Code defaults
+    system_prompt_val = None
+    if agent_def and agent_def.prompt:
+        system_prompt_val = {"type": "preset", "preset": "claude_code", "append": agent_def.prompt}
+
+    # Model: explicit param > agent definition > None (SDK default)
+    resolved_model = model
+    if resolved_model is None and agent_def and agent_def.model and agent_def.model != "inherit":
+        resolved_model = agent_def.model
+
+    # Tools: from agent definition if available
+    resolved_tools = None
+    if agent_def and agent_def.tools:
+        resolved_tools = agent_def.tools
+
     async def _run():
         result_text = ""
-        async for msg in query(
-            prompt=prompt,
-            options=ClaudeAgentOptions(
-                permission_mode="bypassPermissions",
-                model=model,
-                agents=agents or None,
-                cwd=os.getcwd(),
-            ),
-        ):
+        opts = ClaudeAgentOptions(
+            permission_mode="bypassPermissions",
+            model=resolved_model,
+            effort="max",
+            agents=agents or None,
+            cwd=os.getcwd(),
+            system_prompt=system_prompt_val,
+        )
+        if resolved_tools:
+            opts.allowed_tools = resolved_tools
+        async for msg in query(prompt=prompt, options=opts):
             if isinstance(msg, ResultMessage):
                 result_text = msg.result
         return result_text
 
     try:
         asyncio.get_running_loop()
-        # Already inside a running event loop — spin up a thread with its own loop
         with concurrent.futures.ThreadPoolExecutor() as pool:
             future = pool.submit(asyncio.run, _run())
             return future.result()

@@ -1,0 +1,13 @@
+README.md
+pyproject.toml
+claude_code_orchestrate/__init__.py
+claude_code_orchestrate/client.py
+claude_code_orchestrate/mcp_transport.py
+claude_code_orchestrate.egg-info/PKG-INFO
+claude_code_orchestrate.egg-info/SOURCES.txt
+claude_code_orchestrate.egg-info/dependency_links.txt
+claude_code_orchestrate.egg-info/top_level.txt
+tests/test_client.py
+tests/test_init.py
+tests/test_integration.py
+tests/test_transport.py
