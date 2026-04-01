@@ -32,3 +32,50 @@ def test_prefix_raises_without_init():
         assert False, "Should have raised"
     except ClaudeCodeError as e:
         assert "init" in str(e).lower()
+
+
+def test_put_writes_to_correct_path():
+    client = _mock_agfs()
+    with patch("claude_code_orchestrate.context.AGFSClient", return_value=client):
+        ctx_mod.init("test-proj")
+        ctx_mod.put("analysis", "some findings")
+        client.write.assert_called_once_with("/orchestrate/test-proj/analysis", b"some findings")
+
+
+def test_put_creates_parent_dirs():
+    client = _mock_agfs()
+    with patch("claude_code_orchestrate.context.AGFSClient", return_value=client):
+        ctx_mod.init("test-proj")
+        ctx_mod.put("phase-1/findings", "data")
+        client.mkdir.assert_any_call("/orchestrate/test-proj/phase-1")
+
+
+def test_get_reads_from_correct_path():
+    client = _mock_agfs()
+    client.cat = MagicMock(return_value=b"stored content")
+    with patch("claude_code_orchestrate.context.AGFSClient", return_value=client):
+        ctx_mod.init("test-proj")
+        result = ctx_mod.get("analysis")
+        client.cat.assert_called_once_with("/orchestrate/test-proj/analysis")
+        assert result == "stored content"
+
+
+def test_put_get_roundtrip():
+    client = _mock_agfs()
+    stored = {}
+
+    def fake_write(path, data):
+        stored[path] = data
+        return path
+
+    def fake_cat(path):
+        return stored[path]
+
+    client.write = MagicMock(side_effect=fake_write)
+    client.cat = MagicMock(side_effect=fake_cat)
+
+    with patch("claude_code_orchestrate.context.AGFSClient", return_value=client):
+        ctx_mod.init("test-proj")
+        ctx_mod.put("key", "hello world")
+        result = ctx_mod.get("key")
+        assert result == "hello world"

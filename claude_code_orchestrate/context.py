@@ -71,3 +71,26 @@ def init(project: str) -> None:
         client.mkdir(f"/orchestrate/{project}")
     except Exception:
         pass
+
+
+def put(key: str, value: str) -> None:
+    """Store context at key, relative to project scope."""
+    client = _ensure_server()
+    path = f"{_prefix()}/{key}"
+    parent = "/".join(path.split("/")[:-1])
+    if parent:
+        try:
+            client.mkdir(parent)
+        except Exception:
+            pass
+    client.write(path, value.encode())
+
+
+def get(key: str) -> str:
+    """Retrieve context by key."""
+    client = _ensure_server()
+    path = f"{_prefix()}/{key}"
+    data = client.cat(path)
+    if isinstance(data, bytes):
+        return data.decode()
+    return str(data)
