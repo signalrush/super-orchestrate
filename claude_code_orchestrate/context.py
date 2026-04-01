@@ -94,3 +94,27 @@ def get(key: str) -> str:
     if isinstance(data, bytes):
         return data.decode()
     return str(data)
+
+
+def ls(prefix: str = "") -> list[str]:
+    """List stored context keys under the given prefix."""
+    client = _ensure_server()
+    path = f"{_prefix()}/{prefix}".rstrip("/")
+    entries = client.ls(path)
+    return [e["name"] for e in entries]
+
+
+def search(query: str) -> str:
+    """Search across all stored context in the project."""
+    client = _ensure_server()
+    results = client.grep(_prefix(), query, recursive=True)
+    if isinstance(results, bytes):
+        return results.decode()
+    return str(results)
+
+
+def rm(key: str, recursive: bool = False) -> None:
+    """Remove context by key."""
+    client = _ensure_server()
+    path = f"{_prefix()}/{key}"
+    client.rm(path, recursive=recursive)

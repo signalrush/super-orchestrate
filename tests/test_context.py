@@ -79,3 +79,54 @@ def test_put_get_roundtrip():
         ctx_mod.put("key", "hello world")
         result = ctx_mod.get("key")
         assert result == "hello world"
+
+
+def test_ls_returns_names():
+    client = _mock_agfs()
+    client.ls = MagicMock(return_value=[
+        {"name": "analysis"},
+        {"name": "phase-1"},
+    ])
+    with patch("claude_code_orchestrate.context.AGFSClient", return_value=client):
+        ctx_mod.init("test-proj")
+        result = ctx_mod.ls()
+        client.ls.assert_called_once_with("/orchestrate/test-proj")
+        assert result == ["analysis", "phase-1"]
+
+
+def test_ls_with_prefix():
+    client = _mock_agfs()
+    client.ls = MagicMock(return_value=[{"name": "findings"}])
+    with patch("claude_code_orchestrate.context.AGFSClient", return_value=client):
+        ctx_mod.init("test-proj")
+        result = ctx_mod.ls("phase-1/")
+        client.ls.assert_called_once_with("/orchestrate/test-proj/phase-1")
+        assert result == ["findings"]
+
+
+def test_search_greps_project():
+    client = _mock_agfs()
+    client.grep = MagicMock(return_value=b"line1: match\nline2: match")
+    with patch("claude_code_orchestrate.context.AGFSClient", return_value=client):
+        ctx_mod.init("test-proj")
+        result = ctx_mod.search("match")
+        client.grep.assert_called_once_with("/orchestrate/test-proj", "match", recursive=True)
+        assert "match" in result
+
+
+def test_rm_removes_key():
+    client = _mock_agfs()
+    client.rm = MagicMock(return_value={})
+    with patch("claude_code_orchestrate.context.AGFSClient", return_value=client):
+        ctx_mod.init("test-proj")
+        ctx_mod.rm("analysis")
+        client.rm.assert_called_once_with("/orchestrate/test-proj/analysis", recursive=False)
+
+
+def test_rm_recursive():
+    client = _mock_agfs()
+    client.rm = MagicMock(return_value={})
+    with patch("claude_code_orchestrate.context.AGFSClient", return_value=client):
+        ctx_mod.init("test-proj")
+        ctx_mod.rm("phase-1/", recursive=True)
+        client.rm.assert_called_once_with("/orchestrate/test-proj/phase-1/", recursive=True)
