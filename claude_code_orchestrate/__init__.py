@@ -10,6 +10,7 @@ from claude_code_orchestrate.client import (
     Skill, ToolSearch, NotebookEdit,
 )
 from claude_code_orchestrate.mcp_transport import ClaudeCodeError
+from claude_code_orchestrate import context as ctx
 
 __all__ = [
     "Read", "Write", "Edit", "Glob", "Grep",
@@ -22,4 +23,5 @@ __all__ = [
     "EnterWorktree", "ExitWorktree",
     "Skill", "ToolSearch", "NotebookEdit",
     "ClaudeCodeError",
+    "ctx",
 ]

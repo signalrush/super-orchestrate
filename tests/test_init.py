@@ -19,4 +19,4 @@ def test_all_tools_importable():
 
 def test_all_exports_listed():
     import claude_code_orchestrate
-    assert len(claude_code_orchestrate.__all__) == 24
+    assert len(claude_code_orchestrate.__all__) == 25
