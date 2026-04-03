@@ -3,12 +3,14 @@ import atexit
 import concurrent.futures
 import json
 import os
+import threading
 from pathlib import Path
 
 from claude_code_orchestrate.mcp_transport import MCPTransport
 from claude_agent_sdk import query, ClaudeAgentOptions, ResultMessage, AgentDefinition
 
 _transport: MCPTransport | None = None
+_transport_lock = threading.Lock()
 _agent_defs: dict[str, AgentDefinition] | None = None
 
 
@@ -23,6 +25,9 @@ def _load_agent_definitions() -> dict[str, AgentDefinition]:
             text = md_file.read_text()
         except (UnicodeDecodeError, OSError):
             continue
+        # Strip BOM if present (common on Windows)
+        if text.startswith("\ufeff"):
+            text = text[1:]
         # Parse YAML frontmatter
         if not text.startswith("---"):
             continue
@@ -34,20 +39,49 @@ def _load_agent_definitions() -> dict[str, AgentDefinition]:
 
         # Parse frontmatter fields
         meta = {}
+        list_key = None
+        list_items = []
         for line in frontmatter.split("\n"):
+            stripped = line.lstrip()
+            if stripped.startswith("- ") and list_key and line[0] in (" ", "\t"):
+                list_items.append(stripped.removeprefix("- ").strip())
+                continue
+            if list_key and list_items:
+                meta[list_key] = list_items
+                list_items = []
+                list_key = None
             if ":" in line:
                 key, _, val = line.partition(":")
-                meta[key.strip()] = val.strip().strip('"').strip("'")
+                val = val.strip().strip('"').strip("'")
+                if val:
+                    meta[key.strip()] = val
+                else:
+                    list_key = key.strip()
+            else:
+                list_key = None
+        if list_key and list_items:
+            meta[list_key] = list_items
 
         name = meta.get("name", md_file.stem)
-        tools_str = meta.get("tools", "")
-        tools = [t.strip() for t in tools_str.split(",") if t.strip()] if tools_str else None
+        if isinstance(name, list):
+            name = name[0] if name else md_file.stem
+        tools_raw = meta.get("tools", "")
+        if isinstance(tools_raw, list):
+            tools = tools_raw if tools_raw else None
+        else:
+            tools = [t.strip() for t in tools_raw.split(",") if t.strip()] if tools_raw else None
         model_val = meta.get("model", "inherit")
+        if isinstance(model_val, list):
+            model_val = model_val[0] if model_val else "inherit"
         if model_val not in ("sonnet", "opus", "haiku", "inherit"):
             model_val = "inherit"
 
+        desc = meta.get("description", "")
+        if isinstance(desc, list):
+            desc = " ".join(desc)
+
         defs[name] = AgentDefinition(
-            description=meta.get("description", ""),
+            description=desc,
             prompt=body,
             tools=tools,
             model=model_val,
@@ -64,11 +98,13 @@ def _get_agent_definitions() -> dict[str, AgentDefinition]:
 
 def _get_transport() -> MCPTransport:
     global _transport
-    if _transport is None:
-        _transport = MCPTransport()
-        _transport.start()
-        atexit.register(_transport.stop)
-    return _transport
+    with _transport_lock:
+        if _transport is None:
+            t = MCPTransport()
+            t.start()
+            _transport = t
+            atexit.register(t.stop)
+        return _transport
 
 
 def _parse(tool_name: str, raw: str) -> "str | list[str]":
@@ -79,36 +115,45 @@ def _parse(tool_name: str, raw: str) -> "str | list[str]":
         return raw
 
     if tool_name == "Read":
-        if isinstance(data, dict) and "file" in data:
-            return data["file"].get("content", raw)
+        if isinstance(data, dict) and isinstance(data.get("file"), dict):
+            val = data["file"].get("content")
+            return val if val is not None else raw
         return raw
 
     elif tool_name == "Write":
         if isinstance(data, dict) and "filePath" in data:
-            return data["filePath"]
+            val = data["filePath"]
+            return val if val is not None else raw
         return raw
 
     elif tool_name == "Edit":
-        if isinstance(data, dict) and "structuredPatch" in data:
+        if isinstance(data, dict) and isinstance(data.get("structuredPatch"), list):
             lines = []
-            for patch in data.get("structuredPatch", []):
-                lines.extend(patch.get("lines", []))
+            for patch in data["structuredPatch"]:
+                if isinstance(patch, dict):
+                    patch_lines = patch.get("lines")
+                    if isinstance(patch_lines, list):
+                        lines.extend(patch_lines)
             return "\n".join(lines) if lines else raw
         return raw
 
     elif tool_name == "Glob":
         if isinstance(data, dict) and "filenames" in data:
-            return data["filenames"]
+            val = data["filenames"]
+            return val if val is not None else raw
         return raw
 
     elif tool_name == "Grep":
-        if isinstance(data, dict) and "filenames" in data:
-            return data["filenames"]
+        if isinstance(data, dict):
+            for key in ("filenames", "content", "counts"):
+                if key in data and data[key] is not None:
+                    return data[key]
         return raw
 
     elif tool_name == "Bash":
         if isinstance(data, dict) and "stdout" in data:
-            return data["stdout"]
+            val = data["stdout"]
+            return val if val is not None else raw
         return raw
 
     return raw
@@ -134,15 +179,26 @@ def Edit(file_path: str, old_string: str, new_string: str, replace_all: bool = N
     return _call("Edit", file_path=file_path, old_string=old_string, new_string=new_string, replace_all=replace_all)
 
 
-def Glob(pattern: str, path: str = None) -> str:
+def Glob(pattern: str, path: str = None) -> "str | list[str]":
     return _call("Glob", pattern=pattern, path=path)
 
 
 def Grep(pattern: str, path: str = None, glob: str = None, output_mode: str = None,
          type: str = None, head_limit: int = None, offset: int = None,
-         multiline: bool = None, context: int = None) -> str:
-    return _call("Grep", pattern=pattern, path=path, glob=glob, output_mode=output_mode,
-                 type=type, head_limit=head_limit, offset=offset, multiline=multiline, context=context)
+         multiline: bool = None, context: int = None,
+         case_insensitive: bool = None, after_context: int = None,
+         before_context: int = None, context_alias: int = None,
+         line_numbers: bool = None) -> "str | list[str]":
+    kwargs = {
+        "pattern": pattern, "path": path, "glob": glob, "output_mode": output_mode,
+        "type": type, "head_limit": head_limit, "offset": offset,
+        "multiline": multiline, "context": context,
+        "-i": case_insensitive, "-A": after_context,
+        "-B": before_context, "-C": context_alias, "-n": line_numbers,
+    }
+    args = {k: v for k, v in kwargs.items() if v is not None}
+    raw = _get_transport().call_tool("Grep", args)
+    return _parse("Grep", raw)
 
 
 # --- Execution ---
@@ -186,7 +242,6 @@ def Agent(description: str, prompt: str, subagent_type: str = None, model: str =
         opts = ClaudeAgentOptions(
             permission_mode="bypassPermissions",
             model=resolved_model,
-            effort="max",
             agents=agents or None,
             cwd=os.getcwd(),
             system_prompt=system_prompt_val,
@@ -198,12 +253,17 @@ def Agent(description: str, prompt: str, subagent_type: str = None, model: str =
                 result_text = msg.result
         return result_text
 
+    has_loop = True
     try:
         asyncio.get_running_loop()
+    except RuntimeError:
+        has_loop = False
+
+    if has_loop:
         with concurrent.futures.ThreadPoolExecutor() as pool:
             future = pool.submit(asyncio.run, _run())
             return future.result()
-    except RuntimeError:
+    else:
         return asyncio.run(_run())
 
 
